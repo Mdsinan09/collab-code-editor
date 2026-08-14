@@ -1,11 +1,9 @@
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import MonacoEditor, { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
-import * as Y from 'yjs';
-import { WebsocketProvider } from 'y-websocket';
 import { MonacoBinding } from 'y-monaco';
 
-// Inline Data URL worker for Monaco language features
+// Data URL worker to avoid cross-origin CDN Script error
 window.MonacoEnvironment = {
   getWorker: function (_workerId, label) {
     return new Worker(
@@ -22,8 +20,6 @@ window.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
-
-const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:5001';
 
 // Preset color palette for users
 const USER_COLORS = [
@@ -44,21 +40,14 @@ function stringToColor(str) {
   return USER_COLORS[Math.abs(hash) % USER_COLORS.length];
 }
 
-// Inject/remove per-user cursor styles
 function injectCursorStyle(clientId, color) {
   const id = `cursor-style-${clientId}`;
   if (document.getElementById(id)) return;
-
   const style = document.createElement('style');
   style.id = id;
   style.textContent = `
-    .remote-cursor-${clientId} {
-      border-left: 2px solid ${color} !important;
-      margin-left: -1px;
-    }
-    .remote-selection-${clientId} {
-      background-color: ${color}26 !important;
-    }
+    .remote-cursor-${clientId} { border-left: 2px solid ${color} !important; margin-left: -1px; }
+    .remote-selection-${clientId} { background-color: ${color}26 !important; }
   `;
   document.head.appendChild(style);
 }
@@ -68,15 +57,13 @@ function removeCursorStyle(clientId) {
   if (el) el.remove();
 }
 
-const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) => {
+const Editor = forwardRef(({ ydoc, activeFileId, provider, username, onUsersChange }, ref) => {
   const [editorInstance, setEditorInstance] = useState(null);
   const bindingRef = useRef(null);
-  const providerRef = useRef(null);
-  const ydocRef = useRef(null);
   const monacoRef = useRef(null);
   const decorationsRef = useRef({});
   const widgetsRef = useRef({});
-  const userColorRef = useRef(stringToColor(username + roomId));
+  const userColorRef = useRef(stringToColor(username || 'Anonymous'));
   const onUsersChangeRef = useRef(onUsersChange);
 
   useEffect(() => {
@@ -89,30 +76,41 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
     getEditor: () => editorInstance,
   }), [editorInstance]);
 
+  // Bind to active file's Y.Text
   useEffect(() => {
-    if (!editorInstance || !roomId) return;
+    if (!editorInstance || !ydoc || !activeFileId || !provider) return;
 
-    const ydoc = new Y.Doc();
-    const provider = new WebsocketProvider(WS_URL, roomId, ydoc);
-    const ytext = ydoc.getText('monaco');
+    const filesMap = ydoc.getMap('files');
+    const fileMap = filesMap.get(activeFileId);
+    if (!fileMap) return;
 
-    const myColor = userColorRef.current;
-    provider.awareness.setLocalState({
-      user: { name: username, color: myColor },
-    });
+    const ytext = fileMap.get('content');
+    if (!ytext) return;
 
     const binding = new MonacoBinding(
       ytext,
       editorInstance.getModel(),
       new Set([editorInstance])
     );
-
-    ydocRef.current = ydoc;
-    providerRef.current = provider;
     bindingRef.current = binding;
 
-    // Track cursor position
-    const cursorDisposable = editorInstance.onDidChangeCursorSelection((e) => {
+    // Set language from file
+    const language = fileMap.get('language');
+    if (monacoRef.current && language) {
+      monacoRef.current.editor.setModelLanguage(editorInstance.getModel(), language);
+    }
+
+    return () => {
+      binding.destroy();
+      bindingRef.current = null;
+    };
+  }, [editorInstance, ydoc, activeFileId, provider]);
+
+  // Track cursor position
+  useEffect(() => {
+    if (!editorInstance || !provider) return;
+
+    const disposable = editorInstance.onDidChangeCursorSelection((e) => {
       const sel = e.selection;
       provider.awareness.setLocalStateField('cursor', {
         line: sel.positionLineNumber,
@@ -124,13 +122,21 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
       });
     });
 
+    return () => disposable.dispose();
+  }, [editorInstance, provider]);
+
+  // Render remote cursors safely with requestAnimationFrame
+  useEffect(() => {
+    if (!editorInstance || !provider || !monacoRef.current) return;
+
+    const monacoInstance = monacoRef.current;
+
     const renderRemoteCursors = () => {
-      if (!editorInstance || !monacoRef.current) return;
+      if (!editorInstance) return;
 
       const states = Array.from(provider.awareness.getStates().entries());
       const localClientId = provider.awareness.clientID;
 
-      // Build user list for parent
       const allUsers = states.map(([clientId, state]) => ({
         clientId,
         name: state?.user?.name || 'Anonymous',
@@ -143,14 +149,11 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
         onUsersChangeRef.current(allUsers);
       }
 
-      // Find active remote client IDs
       const activeRemoteIds = new Set(
-        states
-          .filter(([id]) => id !== localClientId)
-          .map(([id]) => id)
+        states.filter(([id]) => id !== localClientId).map(([id]) => id)
       );
 
-      // Clean up left users
+      // Cleanup left users
       Object.keys(widgetsRef.current).forEach((clientIdStr) => {
         const cid = parseInt(clientIdStr);
         if (!activeRemoteIds.has(cid)) {
@@ -181,25 +184,20 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
 
         const newDecorations = [];
 
-        // Cursor line
         newDecorations.push({
-          range: new monacoRef.current.Range(cursor.line, cursor.column, cursor.line, cursor.column),
+          range: new monacoInstance.Range(cursor.line, cursor.column, cursor.line, cursor.column),
           options: {
             className: `remote-cursor-${clientId}`,
-            overviewRuler: {
-              color: color,
-              position: monacoRef.current.editor.OverviewRulerLane.Full,
-            },
+            overviewRuler: { color, position: monacoInstance.editor.OverviewRulerLane.Full },
           },
         });
 
-        // Selection highlight
         const hasSelection = cursor.selectionStartLineNumber !== cursor.endLineNumber ||
           cursor.selectionStartColumn !== cursor.endColumn;
 
         if (hasSelection) {
           newDecorations.push({
-            range: new monacoRef.current.Range(
+            range: new monacoInstance.Range(
               cursor.selectionStartLineNumber,
               cursor.selectionStartColumn,
               cursor.endLineNumber,
@@ -207,10 +205,7 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
             ),
             options: {
               className: `remote-selection-${clientId}`,
-              overviewRuler: {
-                color: color + '40',
-                position: monacoRef.current.editor.OverviewRulerLane.Full,
-              },
+              overviewRuler: { color: color + '40', position: monacoInstance.editor.OverviewRulerLane.Full },
             },
           });
         }
@@ -218,10 +213,7 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
         const oldDecorations = decorationsRef.current[clientId] || [];
         decorationsRef.current[clientId] = editorInstance.deltaDecorations(oldDecorations, newDecorations);
 
-        // Name tag widget
         const widgetId = `cursor-label-${clientId}`;
-
-        // Remove old widget
         if (widgetsRef.current[clientId]) {
           try { editorInstance.removeContentWidget(widgetsRef.current[clientId]); } catch (e) {}
         }
@@ -231,28 +223,19 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
           getDomNode: () => {
             const el = document.createElement('div');
             el.style.cssText = `
-              background-color: ${color};
-              color: white;
-              padding: 2px 6px;
-              border-radius: 3px 3px 3px 0;
-              font-size: 11px;
+              background-color: ${color}; color: white; padding: 2px 6px;
+              border-radius: 3px 3px 3px 0; font-size: 11px;
               font-family: ui-sans-serif, system-ui, sans-serif;
-              font-weight: 600;
-              white-space: nowrap;
-              pointer-events: none;
-              position: relative;
-              top: -20px;
-              left: -2px;
-              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-              z-index: 100;
-              line-height: 1.2;
+              font-weight: 600; white-space: nowrap; pointer-events: none;
+              position: relative; top: -20px; left: -2px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.3); z-index: 100; line-height: 1.2;
             `;
             el.textContent = name;
             return el;
           },
           getPosition: () => ({
-            position: new monacoRef.current.Position(cursor.line, cursor.column),
-            preference: [monacoRef.current.editor.ContentWidgetPositionPreference.EXACT],
+            position: new monacoInstance.Position(cursor.line, cursor.column),
+            preference: [monacoInstance.editor.ContentWidgetPositionPreference.EXACT],
           }),
         };
 
@@ -273,62 +256,42 @@ const Editor = forwardRef(({ roomId, language, username, onUsersChange }, ref) =
     provider.awareness.on('change', scheduleRenderRemoteCursors);
     scheduleRenderRemoteCursors();
 
-    console.log(`Connected to room: ${roomId} as ${username}`);
-
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
-      cursorDisposable.dispose();
-
+      provider.awareness.off('change', scheduleRenderRemoteCursors);
       Object.values(decorationsRef.current).forEach((decs) => {
         try { editorInstance.deltaDecorations(decs, []); } catch (e) {}
       });
       decorationsRef.current = {};
-
       Object.values(widgetsRef.current).forEach((widget) => {
         try { editorInstance.removeContentWidget(widget); } catch (e) {}
       });
       widgetsRef.current = {};
-
-      // Clean up all injected styles
-      for (let i = 0; i < USER_COLORS.length + 100; i++) {
-        removeCursorStyle(i);
-      }
-
-      binding.destroy();
-      provider.destroy();
-      ydoc.destroy();
-      console.log(`Disconnected from room: ${roomId}`);
+      for (let i = 0; i < 200; i++) removeCursorStyle(i);
     };
-  }, [roomId, editorInstance, username]);
-
-  // Update language
-  useEffect(() => {
-    if (editorInstance && monacoRef.current) {
-      monacoRef.current.editor.setModelLanguage(editorInstance.getModel(), language);
-    }
-  }, [language, editorInstance]);
+  }, [editorInstance, provider]);
 
   // Update username in awareness
   useEffect(() => {
-    if (providerRef.current) {
-      const currentState = providerRef.current.awareness.getLocalState() || {};
-      providerRef.current.awareness.setLocalState({
+    if (provider) {
+      const currentState = provider.awareness.getLocalState() || {};
+      provider.awareness.setLocalState({
         ...currentState,
         user: { name: username, color: userColorRef.current },
       });
     }
-  }, [username]);
+  }, [username, provider]);
 
-  const handleEditorDidMount = (editor, monaco) => {
+  const handleEditorDidMount = (editor, monacoInstance) => {
     setEditorInstance(editor);
-    monacoRef.current = monaco;
+    monacoRef.current = monacoInstance;
   };
 
   return (
     <div className="w-full h-full relative">
       <MonacoEditor
         height="100%"
-        defaultLanguage={language}
+        defaultLanguage="javascript"
         theme="vs-dark"
         onMount={handleEditorDidMount}
         options={{

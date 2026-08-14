@@ -6,6 +6,7 @@ const cors = require('cors');
 const { setupWSConnection } = require('y-websocket/bin/utils');
 const { sequelize, Document } = require('./models/Document');
 const { Execution } = require('./models/Execution');
+const { File } = require('./models/File');
 
 const app = express();
 const server = http.createServer(app);
