@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: collab-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: collabeditor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: collab-backend
+    ports:
+      - "5001:5001"
+    environment:
+      PORT: 5001
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: collabeditor
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      NODE_ENV: development
+      EXECUTOR_URL: http://executor:5002
+    depends_on:
+      db:
+        condition: service_healthy
+      executor:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm start"
+
+  executor:
+    build: ./executor
+    container_name: collab-executor
+    ports:
+      - "5002:5002"
+    environment:
+      PORT: 5002
+    volumes:
+      - ./executor:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm start"
+
+volumes:
+  pgdata:
