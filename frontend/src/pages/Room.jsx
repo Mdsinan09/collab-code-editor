@@ -112,13 +112,13 @@ function Room() {
     };
 
     provider.on('synced', handleSync);
-    filesMap.observe(updateFromYjs);
+    filesMap.observeDeep(updateFromYjs);
     roomState.observe(updateFromYjs);
     updateFromYjs();
 
     return () => {
       provider.off('synced', handleSync);
-      filesMap.unobserve(updateFromYjs);
+      filesMap.unobserveDeep(updateFromYjs);
       roomState.unobserve(updateFromYjs);
       provider.destroy();
       ydoc.destroy();

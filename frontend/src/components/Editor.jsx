@@ -94,13 +94,17 @@ const Editor = forwardRef(({ ydoc, activeFileId, provider, username, onUsersChan
     );
     bindingRef.current = binding;
 
-    // Set language from file
-    const language = fileMap.get('language');
-    if (monacoRef.current && language) {
-      monacoRef.current.editor.setModelLanguage(editorInstance.getModel(), language);
-    }
+    const updateLanguage = () => {
+      const language = fileMap.get('language');
+      if (monacoRef.current && language) {
+        monacoRef.current.editor.setModelLanguage(editorInstance.getModel(), language);
+      }
+    };
+    updateLanguage();
+    fileMap.observe(updateLanguage);
 
     return () => {
+      fileMap.unobserve(updateLanguage);
       binding.destroy();
       bindingRef.current = null;
     };
