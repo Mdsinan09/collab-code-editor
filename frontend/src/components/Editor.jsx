@@ -97,7 +97,11 @@ const Editor = forwardRef(({ ydoc, activeFileId, provider, username, onUsersChan
     const updateLanguage = () => {
       const language = fileMap.get('language');
       if (monacoRef.current && language) {
-        monacoRef.current.editor.setModelLanguage(editorInstance.getModel(), language);
+        const model = editorInstance.getModel();
+        if (model) {
+          monacoRef.current.editor.setModelLanguage(model, language);
+          monacoRef.current.editor.setModelMarkers(model, 'owner', []);
+        }
       }
     };
     updateLanguage();
@@ -289,6 +293,18 @@ const Editor = forwardRef(({ ydoc, activeFileId, provider, username, onUsersChan
   const handleEditorDidMount = (editor, monacoInstance) => {
     setEditorInstance(editor);
     monacoRef.current = monacoInstance;
+
+    // Disable default JS/TS linters to prevent false syntax error highlights in Python/C++/Java files
+    if (monacoInstance.languages?.typescript) {
+      monacoInstance.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSyntaxValidation: true,
+      });
+      monacoInstance.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSyntaxValidation: true,
+      });
+    }
   };
 
   return (
