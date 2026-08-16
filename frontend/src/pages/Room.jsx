@@ -51,14 +51,16 @@ function Room() {
   const userColorRef = useRef(null);
   const chatArrayRef = useRef(null);
   const sidebarTabRef = useRef(sidebarTab);
+  const sidebarOpenRef = useRef(sidebarOpen);
   const { showToast, ToastComponent } = useToast();
 
   useEffect(() => {
     sidebarTabRef.current = sidebarTab;
-    if (sidebarTab === 'chat') {
+    sidebarOpenRef.current = sidebarOpen;
+    if (sidebarOpen && sidebarTab === 'chat') {
       setUnreadChatCount(0);
     }
-  }, [sidebarTab]);
+  }, [sidebarOpen, sidebarTab]);
 
   // Generate consistent user color
   if (!userColorRef.current) {
@@ -115,6 +117,9 @@ function Room() {
     updateFromYjs();
 
     // Watch chat messages
+    let isInitialLoad = true;
+    let prevMsgCount = 0;
+
     const updateChat = () => {
       const msgs = [];
       chatArray.forEach((msgMap) => {
@@ -128,8 +133,20 @@ function Room() {
       });
       setChatMessages(msgs);
 
-      if (sidebarTabRef.current !== 'chat') {
-        setUnreadChatCount(prev => prev + 1);
+      if (isInitialLoad) {
+        isInitialLoad = false;
+        prevMsgCount = msgs.length;
+        setUnreadChatCount(0);
+        return;
+      }
+
+      const newCount = msgs.length - prevMsgCount;
+      prevMsgCount = msgs.length;
+
+      if (newCount > 0) {
+        if (!sidebarOpenRef.current || sidebarTabRef.current !== 'chat') {
+          setUnreadChatCount(prev => prev + newCount);
+        }
       }
     };
 
@@ -385,6 +402,7 @@ function Room() {
         users={users}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         sidebarOpen={sidebarOpen}
+        unreadChatCount={unreadChatCount}
         fileName={activeFile?.name || ''}
       />
 

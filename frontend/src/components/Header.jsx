@@ -22,6 +22,7 @@ function Header({
   users,
   onToggleSidebar,
   sidebarOpen,
+  unreadChatCount = 0,
 }) {
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -34,16 +35,21 @@ function Header({
 
   return (
     <header className="flex items-center justify-between px-4 py-2.5 bg-slate-800 border-b border-slate-700 shrink-0">
-      {/* Left: Logo + Room */}
-      <div className="flex items-center gap-3">
+      {/* Left: Logo + Room + Filename */}
+      <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={onToggleSidebar}
-          className={`p-1.5 rounded-lg transition-colors ${sidebarOpen ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
+          className={`relative p-1.5 rounded-lg transition-colors shrink-0 ${sidebarOpen ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'}`}
           title="Toggle sidebar"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
+          {!sidebarOpen && unreadChatCount > 0 && (
+            <span className="absolute -top-1 -right-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-rose-500 text-[9px] font-bold text-white shadow-sm ring-2 ring-slate-800">
+              {unreadChatCount > 99 ? '99+' : unreadChatCount}
+            </span>
+          )}
         </button>
 
         <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
