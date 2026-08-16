@@ -8,6 +8,7 @@ import FileTree from '../components/FileTree';
 import Tabs from '../components/Tabs';
 import UserList from '../components/UserList';
 import ExecutionHistory from '../components/ExecutionHistory';
+import Chat from '../components/Chat';
 import UsernameModal from '../components/UsernameModal';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { useToast } from '../components/Toast';
@@ -36,9 +37,11 @@ function Room() {
   const [showOutput, setShowOutput] = useState(false);
   const [outputHeight, setOutputHeight] = useState(200);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarTab, setSidebarTab] = useState('files'); // 'files' | 'users' | 'history'
+  const [sidebarTab, setSidebarTab] = useState('files');
   const [users, setUsers] = useState([]);
   const [executions, setExecutions] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [usernameModalOpen, setUsernameModalOpen] = useState(false);
 
   const [username, setUsername] = useLocalStorage('collab-username', '');
@@ -46,7 +49,16 @@ function Room() {
   const ydocRef = useRef(null);
   const providerRef = useRef(null);
   const userColorRef = useRef(null);
+  const chatArrayRef = useRef(null);
+  const sidebarTabRef = useRef(sidebarTab);
   const { showToast, ToastComponent } = useToast();
+
+  useEffect(() => {
+    sidebarTabRef.current = sidebarTab;
+    if (sidebarTab === 'chat') {
+      setUnreadChatCount(0);
+    }
+  }, [sidebarTab]);
 
   // Generate consistent user color
   if (!userColorRef.current) {
@@ -75,7 +87,10 @@ function Room() {
 
     const filesMap = ydoc.getMap('files');
     const roomState = ydoc.getMap('roomState');
+    const chatArray = ydoc.getArray('chat');
+    chatArrayRef.current = chatArray;
 
+    // Watch files deeply
     const updateFromYjs = () => {
       const newFiles = [];
       filesMap.forEach((fileMap, fileId) => {
@@ -85,20 +100,8 @@ function Room() {
           language: fileMap.get('language'),
         });
       });
-
-      // Default initial file if room is empty
-      if (newFiles.length === 0 && provider.synced) {
-        const defaultId = 'file-' + Date.now();
-        const defaultMap = new Y.Map();
-        defaultMap.set('name', 'index.js');
-        defaultMap.set('language', 'javascript');
-        defaultMap.set('content', new Y.Text());
-        filesMap.set(defaultId, defaultMap);
-        roomState.set('activeFileId', defaultId);
-        return;
-      }
-
       setFiles(newFiles);
+
       const currentActive = roomState.get('activeFileId');
       if (currentActive && filesMap.has(currentActive)) {
         setActiveFileId(currentActive);
@@ -107,19 +110,36 @@ function Room() {
       }
     };
 
-    const handleSync = (isSynced) => {
-      if (isSynced) updateFromYjs();
-    };
-
-    provider.on('synced', handleSync);
     filesMap.observeDeep(updateFromYjs);
     roomState.observe(updateFromYjs);
     updateFromYjs();
 
+    // Watch chat messages
+    const updateChat = () => {
+      const msgs = [];
+      chatArray.forEach((msgMap) => {
+        msgs.push({
+          id: msgMap.get('id'),
+          userName: msgMap.get('userName'),
+          userColor: msgMap.get('userColor'),
+          text: msgMap.get('text'),
+          timestamp: msgMap.get('timestamp'),
+        });
+      });
+      setChatMessages(msgs);
+
+      if (sidebarTabRef.current !== 'chat') {
+        setUnreadChatCount(prev => prev + 1);
+      }
+    };
+
+    chatArray.observe(updateChat);
+    updateChat();
+
     return () => {
-      provider.off('synced', handleSync);
       filesMap.unobserveDeep(updateFromYjs);
       roomState.unobserve(updateFromYjs);
+      chatArray.unobserve(updateChat);
       provider.destroy();
       ydoc.destroy();
     };
@@ -141,6 +161,21 @@ function Room() {
 
   const activeFile = files.find(f => f.id === activeFileId);
   const currentLanguage = activeFile?.language || 'javascript';
+
+  // Send Chat Message
+  const handleSendMessage = useCallback((text) => {
+    const chatArray = chatArrayRef.current;
+    if (!chatArray) return;
+
+    const msgMap = new Y.Map();
+    msgMap.set('id', `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+    msgMap.set('userName', username || 'Anonymous');
+    msgMap.set('userColor', userColorRef.current);
+    msgMap.set('text', text);
+    msgMap.set('timestamp', new Date().toISOString());
+
+    chatArray.push([msgMap]);
+  }, [username]);
 
   // File operations
   const handleSelectFile = useCallback((fileId) => {
@@ -311,6 +346,21 @@ function Room() {
 
   const exitCodeColor = output?.exitCode === 0 ? 'text-emerald-400' : 'text-rose-400';
 
+  const sidebarTabs = [
+    { id: 'files', label: 'Files', icon: (
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+    )},
+    { id: 'users', label: 'Users', icon: (
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+    )},
+    { id: 'history', label: 'History', icon: (
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    )},
+    { id: 'chat', label: 'Chat', icon: (
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+    ), badge: unreadChatCount },
+  ];
+
   return (
     <div className="flex flex-col h-screen bg-slate-900">
       <UsernameModal isOpen={usernameModalOpen} onSave={handleUsernameSave} currentName={username} />
@@ -341,24 +391,14 @@ function Room() {
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         {sidebarOpen && (
-          <div className="w-64 bg-slate-800 border-r border-slate-700 flex flex-col shrink-0">
+          <div className="w-72 bg-slate-800 border-r border-slate-700 flex flex-col shrink-0">
             {/* Sidebar tabs */}
             <div className="flex items-center border-b border-slate-700 shrink-0">
-              {[
-                { id: 'files', label: 'Files', icon: (
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
-                )},
-                { id: 'users', label: 'Users', icon: (
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-                )},
-                { id: 'history', label: 'History', icon: (
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                )},
-              ].map(tab => (
+              {sidebarTabs.map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setSidebarTab(tab.id)}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors ${
+                  className={`relative flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors ${
                     sidebarTab === tab.id
                       ? 'text-white bg-slate-700/50 border-b-2 border-emerald-500'
                       : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/20'
@@ -366,6 +406,11 @@ function Room() {
                 >
                   {tab.icon}
                   <span className="hidden sm:inline">{tab.label}</span>
+                  {tab.badge > 0 && (
+                    <span className="absolute top-1 right-1 px-1.5 py-0.5 text-[9px] font-bold bg-rose-500 text-white rounded-full leading-none">
+                      {tab.badge > 99 ? '99+' : tab.badge}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -385,6 +430,15 @@ function Room() {
             {sidebarTab === 'users' && <UserList users={users} isOpen={true} />}
             {sidebarTab === 'history' && (
               <ExecutionHistory executions={executions} onReRun={handleReRun} isOpen={true} />
+            )}
+            {sidebarTab === 'chat' && (
+              <Chat
+                messages={chatMessages}
+                currentUser={username || 'Anonymous'}
+                userColor={userColorRef.current}
+                onSendMessage={handleSendMessage}
+                isOpen={true}
+              />
             )}
           </div>
         )}

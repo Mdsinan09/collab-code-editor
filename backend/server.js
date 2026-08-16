@@ -3,10 +3,12 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
+const Y = require('yjs');
 const { setupWSConnection } = require('y-websocket/bin/utils');
 const { sequelize, Document } = require('./models/Document');
 const { Execution } = require('./models/Execution');
 const { File } = require('./models/File');
+const { ChatMessage } = require('./models/ChatMessage');
 
 const app = express();
 const server = http.createServer(app);
@@ -29,25 +31,95 @@ function debounce(fn, ms) {
 const persistence = {
   bindState: async (docName, ydoc) => {
     try {
-      const ytext = ydoc.getText('monaco');
+      const filesMap = ydoc.getMap('files');
+      const roomState = ydoc.getMap('roomState');
+      const chatArray = ydoc.getArray('chat');
 
-      // Load existing content from DB
-      const doc = await Document.findByPk(docName);
-      if (doc && doc.content && ytext.length === 0) {
-        ytext.insert(0, doc.content);
+      // Only load from DB if document is empty (first connection)
+      if (filesMap.size === 0) {
+        // Load files
+        const dbFiles = await File.findAll({
+          where: { roomId: docName },
+          order: [['createdAt', 'ASC']],
+        });
+
+        if (dbFiles.length > 0) {
+          dbFiles.forEach((dbFile) => {
+            const fileMap = new Y.Map();
+            fileMap.set('name', dbFile.name);
+            fileMap.set('language', dbFile.language);
+            const ytext = new Y.Text();
+            if (dbFile.content) ytext.insert(0, dbFile.content);
+            fileMap.set('content', ytext);
+            filesMap.set(dbFile.id, fileMap);
+          });
+          roomState.set('activeFileId', dbFiles[0].id);
+        } else {
+          const defaultId = 'file-' + Date.now();
+          const fileMap = new Y.Map();
+          fileMap.set('name', 'index.js');
+          fileMap.set('language', 'javascript');
+          const ytext = new Y.Text();
+          fileMap.set('content', ytext);
+          filesMap.set(defaultId, fileMap);
+          roomState.set('activeFileId', defaultId);
+        }
+
+        // Load chat messages
+        const dbMessages = await ChatMessage.findAll({
+          where: { roomId: docName },
+          order: [['createdAt', 'ASC']],
+          limit: 200,
+        });
+
+        dbMessages.forEach((msg) => {
+          const msgMap = new Y.Map();
+          msgMap.set('id', msg.id);
+          msgMap.set('userName', msg.userName);
+          msgMap.set('userColor', msg.userColor);
+          msgMap.set('text', msg.text);
+          msgMap.set('timestamp', msg.createdAt.toISOString());
+          chatArray.push([msgMap]);
+        });
       }
 
-      // Auto-save on changes (debounced)
+      // Auto-save files and chat on change (debounced)
       const saveToDb = debounce(async () => {
         try {
-          const content = ytext.toString();
-          await Document.upsert({
-            id: docName,
-            name: docName,
-            content: content,
-            language: 'javascript',
-            updatedAt: new Date(),
-          });
+          // Save files
+          const entries = Array.from(filesMap.entries());
+          for (const [fileId, fileMap] of entries) {
+            const ytext = fileMap.get('content');
+            await File.upsert({
+              id: fileId,
+              roomId: docName,
+              name: fileMap.get('name'),
+              language: fileMap.get('language'),
+              content: ytext.toString(),
+              updatedAt: new Date(),
+            });
+          }
+
+          // Save chat messages (only new ones)
+          const existingIds = new Set((await ChatMessage.findAll({
+            where: { roomId: docName },
+            attributes: ['id'],
+          })).map(m => m.id));
+
+          for (let i = 0; i < chatArray.length; i++) {
+            const msgMap = chatArray.get(i);
+            const msgId = msgMap.get('id');
+            if (!existingIds.has(msgId)) {
+              await ChatMessage.create({
+                id: msgId,
+                roomId: docName,
+                userName: msgMap.get('userName'),
+                userColor: msgMap.get('userColor'),
+                text: msgMap.get('text'),
+                createdAt: new Date(msgMap.get('timestamp')),
+              });
+            }
+          }
         } catch (err) {
           console.error('Auto-save failed:', err.message);
         }
@@ -62,14 +134,43 @@ const persistence = {
 
   writeState: async (docName, ydoc) => {
     try {
-      const ytext = ydoc.getText('monaco');
-      await Document.upsert({
-        id: docName,
-        name: docName,
-        content: ytext.toString(),
-        language: 'javascript',
-        updatedAt: new Date(),
-      });
+      const filesMap = ydoc.getMap('files');
+      const chatArray = ydoc.getArray('chat');
+
+      // Save all files
+      const entries = Array.from(filesMap.entries());
+      for (const [fileId, fileMap] of entries) {
+        const ytext = fileMap.get('content');
+        await File.upsert({
+          id: fileId,
+          roomId: docName,
+          name: fileMap.get('name'),
+          language: fileMap.get('language'),
+          content: ytext.toString(),
+          updatedAt: new Date(),
+        });
+      }
+
+      // Save all chat messages
+      const existingIds = new Set((await ChatMessage.findAll({
+        where: { roomId: docName },
+        attributes: ['id'],
+      })).map(m => m.id));
+
+      for (let i = 0; i < chatArray.length; i++) {
+        const msgMap = chatArray.get(i);
+        const msgId = msgMap.get('id');
+        if (!existingIds.has(msgId)) {
+          await ChatMessage.create({
+            id: msgId,
+            roomId: docName,
+            userName: msgMap.get('userName'),
+            userColor: msgMap.get('userColor'),
+            text: msgMap.get('text'),
+            createdAt: new Date(msgMap.get('timestamp')),
+          });
+        }
+      }
     } catch (err) {
       console.error('writeState error:', err.message);
     }
@@ -80,7 +181,6 @@ const persistence = {
 const wss = new WebSocket.Server({ server });
 
 wss.on('connection', (ws, req) => {
-  // Extract room ID from URL path (e.g., /test-room)
   const docName = decodeURIComponent(req.url.slice(1).split('?')[0]) || 'default';
   console.log(`WS connection: room=${docName}`);
 
@@ -96,27 +196,13 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-app.get('/api/documents/:id', async (req, res) => {
+app.get('/api/rooms/:roomId/files', async (req, res) => {
   try {
-    const doc = await Document.findByPk(req.params.id);
-    if (!doc) return res.status(404).json({ error: 'Not found' });
-    res.json(doc);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/documents/:id', async (req, res) => {
-  try {
-    const { name, content, language } = req.body;
-    const [doc, created] = await Document.upsert({
-      id: req.params.id,
-      name: name || req.params.id,
-      content: content || '',
-      language: language || 'javascript',
-      updatedAt: new Date(),
+    const files = await File.findAll({
+      where: { roomId: req.params.roomId },
+      order: [['createdAt', 'ASC']],
     });
-    res.json({ doc, created });
+    res.json(files);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -181,6 +267,24 @@ app.get('/api/executions/:roomId', async (req, res) => {
     });
 
     res.json(executions);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== CHAT HISTORY ==========
+app.get('/api/chat/:roomId', async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { limit = 200 } = req.query;
+
+    const messages = await ChatMessage.findAll({
+      where: { roomId },
+      order: [['createdAt', 'ASC']],
+      limit: parseInt(limit),
+    });
+
+    res.json(messages);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
