@@ -12,6 +12,7 @@ import Chat from '../components/Chat';
 import UsernameModal from '../components/UsernameModal';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:5001';
 
@@ -71,10 +72,24 @@ function Room() {
     userColorRef.current = colors[Math.abs(hash) % colors.length];
   }
 
-  // Prompt for username on first visit
+  const { user: authUser, isAuthenticated } = useAuth();
+  const activeUsername = isAuthenticated ? authUser.displayName : (username || 'Anonymous');
+  const activeColor = isAuthenticated ? authUser.color : userColorRef.current;
+
+  // Update awareness when username/color changes
   useEffect(() => {
-    if (!username) setUsernameModalOpen(true);
-  }, [username]);
+    if (providerRef.current?.awareness) {
+      providerRef.current.awareness.setLocalStateField('user', {
+        name: activeUsername,
+        color: activeColor,
+      });
+    }
+  }, [activeUsername, activeColor]);
+
+  // Prompt for username on first visit (only if not authenticated)
+  useEffect(() => {
+    if (!username && !isAuthenticated) setUsernameModalOpen(true);
+  }, [username, isAuthenticated]);
 
   // Create Y.Doc and connect
   useEffect(() => {
@@ -84,7 +99,7 @@ function Room() {
     providerRef.current = provider;
 
     provider.awareness.setLocalState({
-      user: { name: username || 'Anonymous', color: userColorRef.current },
+      user: { name: activeUsername, color: activeColor },
     });
 
     const filesMap = ydoc.getMap('files');

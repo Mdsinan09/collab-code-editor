@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import AuthModal from './AuthModal';
 
 const LANGUAGES = [
   { value: 'javascript', label: 'JavaScript', ext: 'js' },
@@ -26,12 +28,17 @@ function Header({
 }) {
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
+  const { user, logout, isAuthenticated } = useAuth();
 
   const currentLang = LANGUAGES.find(l => l.value === language);
 
   const getInitials = (name) => {
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+    return (name || 'A').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
+
+  const displayName = isAuthenticated ? user?.displayName : username;
+  const userColor = isAuthenticated ? user?.color : (users.find(u => u.isMe)?.color || '#64748b');
 
   return (
     <header className="flex items-center justify-between px-4 py-2.5 bg-slate-800 border-b border-slate-700 shrink-0">
@@ -85,42 +92,68 @@ function Header({
 
       {/* Right: Controls */}
       <div className="flex items-center gap-2">
-        {/* Username dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => setUserMenuOpen(!userMenuOpen)}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
-          >
-            <div
-              className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
-              style={{ backgroundColor: users.find(u => u.isMe)?.color || '#64748b' }}
+        {/* User / Auth controls */}
+        {isAuthenticated ? (
+          <div className="relative">
+            <button
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
             >
-              {getInitials(username)}
-            </div>
-            <span className="max-w-[100px] truncate hidden sm:inline">{username}</span>
-            <svg className="h-3 w-3 text-slate-500" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-            </svg>
-          </button>
-
-          {userMenuOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
-              <div className="absolute right-0 top-full mt-1 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-1">
-                <button
-                  onClick={() => { setUserMenuOpen(false); onUsernameClick(); }}
-                  className="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
-                >
-                  Change Name
-                </button>
-                <div className="border-t border-slate-700 my-1" />
-                <div className="px-4 py-2 text-xs text-slate-500">
-                  {users.length} user{users.length !== 1 ? 's' : ''} online
-                </div>
+              <div
+                className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
+                style={{ backgroundColor: userColor }}
+              >
+                {getInitials(displayName)}
               </div>
-            </>
-          )}
-        </div>
+              <span className="max-w-[100px] truncate hidden sm:inline">{displayName}</span>
+              <svg className="h-3 w-3 text-slate-500" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            </button>
+
+            {userMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 py-1">
+                  <div className="px-4 py-2 text-xs text-slate-400 border-b border-slate-700 font-medium">
+                    Signed in as <span className="text-emerald-400 font-bold">@{user?.username}</span>
+                  </div>
+                  <button
+                    onClick={() => { setUserMenuOpen(false); logout(); }}
+                    className="w-full text-left px-4 py-2 text-sm text-rose-400 hover:bg-slate-700 transition-colors font-medium"
+                  >
+                    Sign Out
+                  </button>
+                  <div className="border-t border-slate-700 my-1" />
+                  <div className="px-4 py-1.5 text-xs text-slate-500">
+                    {users.length} user{users.length !== 1 ? 's' : ''} online
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
+            >
+              <div
+                className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
+                style={{ backgroundColor: userColor }}
+              >
+                {getInitials(username)}
+              </div>
+              <span className="max-w-[100px] truncate hidden sm:inline">{username}</span>
+            </button>
+            <button
+              onClick={() => setShowAuth(true)}
+              className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors shadow-sm"
+            >
+              Sign In
+            </button>
+          </div>
+        )}
 
         <div className="h-5 w-px bg-slate-600" />
 
@@ -222,6 +255,8 @@ function Header({
           )}
         </button>
       </div>
+
+      <AuthModal isOpen={showAuth} onClose={() => setShowAuth(false)} />
     </header>
   );
 }

@@ -9,12 +9,15 @@ const { sequelize, Document } = require('./models/Document');
 const { Execution } = require('./models/Execution');
 const { File } = require('./models/File');
 const { ChatMessage } = require('./models/ChatMessage');
+const User = require('./models/User');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 const server = http.createServer(app);
 
 app.use(cors());
 app.use(express.json());
+app.use('/api/auth', authRoutes);
 
 const EXECUTOR_URL = process.env.EXECUTOR_URL || 'http://localhost:5002';
 
